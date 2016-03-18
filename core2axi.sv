@@ -23,8 +23,8 @@ module core2axi
 )
 (
     // Clock and Reset
-    input logic                           clk,
-    input logic                           rst_n,
+    input logic                           clk_i,
+    input logic                           rst_ni,
 
     input  logic                          data_req_i,
     output logic                          data_gnt_o,
@@ -191,9 +191,9 @@ module core2axi
   end
 
   // registers
-  always_ff @(posedge clk, negedge rst_n)
+  always_ff @(posedge clk_i, negedge rst_ni)
   begin
-    if (~rst_n)
+    if (~rst_ni)
     begin
       CS    <= IDLE;
       gnt_q <= 1'b0;
