@@ -1,0 +1,4 @@
+axi2apb:
+  files: [
+    core2axi.sv,
+  ]
