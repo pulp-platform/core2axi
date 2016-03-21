@@ -103,10 +103,11 @@ module core2axi
 
   logic    gnt_q;
 
-  logic    id, id_q;
   logic    done;
 
 
+  // TODO: this IP can safe some cycles when multiple request are sent
+  // directly after each other
   always_comb
   begin
     NS         = CS;
@@ -121,6 +122,7 @@ module core2axi
     b_ready_o  = 1'b0;
 
     case (CS)
+      // wait for a request to come in from the core
       IDLE:
       begin
         if (data_req_i)
@@ -195,23 +197,60 @@ module core2axi
   begin
     if (~rst_ni)
     begin
-      CS    <= IDLE;
-      gnt_q <= 1'b0;
-      id_q  <= '0;
+      CS     <= IDLE;
+      gnt_q  <= 1'b0;
     end
     else
     begin
-      CS    <= NS;
-      gnt_q <= data_gnt_o;
-      id_q  <= id;
+      CS     <= NS;
+      gnt_q  <= data_gnt_o;
     end
   end
 
+  // take care of read data adaption
+  generate if (AXI4_RDATA_WIDTH == 32) begin
+      assign data_rdata_o = r_data_i[31:0];
+    end else if (AXI4_RDATA_WIDTH == 64) begin
+      logic [0:0] addr_q;
 
-  assign aw_id_o     = id;
+      always_ff @(posedge clk_i, negedge rst_ni)
+      begin
+        if (~rst_ni)
+          addr_q <= '0;
+        else
+          if (data_gnt_o) // only update when we give the grant
+            addr_q <= data_addr_i[2:2];
+      end
+
+      assign data_rdata_o = addr_q[0] ? r_data_i[63:32] : r_data_i[31:0];
+    end else begin
+      $error("AXI4_WDATA_WIDTH has an invalid value");
+    end
+  endgenerate;
+
+  // take care of write data adaption
+  generate
+    genvar w;
+    for(w = 0; w < AXI4_WDATA_WIDTH/32; w++) begin
+      assign w_data_o[w*32 + 31:w*32 + 0] = data_wdata_i; // just replicate the wdata to fill the bus
+    end
+  endgenerate
+
+  // take care of write strobe
+  generate if (AXI4_WDATA_WIDTH == 32) begin
+      assign w_strb_o = data_be_i;
+    end else if (AXI4_WDATA_WIDTH == 64) begin
+      assign w_strb_o = data_addr_i[2] ? {data_be_i, 4'b0000} : {4'b0000, data_be_i};
+    end else begin
+      $error("AXI4_WDATA_WIDTH has an invalid value");
+    end
+  endgenerate
+
+  // AXI interface assignments
+  assign aw_id_o     = '0;
   assign aw_addr_o   = data_addr_i;
+  assign aw_size_o   = $clog2(AXI4_WDATA_WIDTH/8);
   assign aw_len_o    = '0;
-  assign aw_size_o   = '0;
   assign aw_burst_o  = '0;
   assign aw_lock_o   = '0;
   assign aw_cache_o  = '0;
@@ -220,11 +259,11 @@ module core2axi
   assign aw_user_o   = '0;
   assign aw_qos_o    = '0;
 
-  assign ar_id_o     = id;
+  assign ar_id_o     = '0;
   assign ar_addr_o   = data_addr_i;
-  assign ar_size_o   = 3'b010;
-  assign ar_len_o    = 4'b0000;
-  assign ar_burst_o  = 2'b01;
+  assign ar_size_o   = $clog2(AXI4_RDATA_WIDTH/8);
+  assign ar_len_o    = '0;
+  assign ar_burst_o  = '0;
   assign ar_prot_o   = '0;
   assign ar_region_o = '0;
   assign ar_lock_o   = '0;
@@ -234,14 +273,8 @@ module core2axi
 
   assign w_last_o    = 1'b1;
   assign w_user_o    = '0;
-  assign w_strb_o    = data_be_i;
-  assign w_data_o    = data_wdata_i;
 
-  assign data_rdata_o   = r_data_i[31:0];
-
-  assign data_rvalid_o  = gnt_q;
-
-
-  assign id = (done) ? (~id_q) : id_q;
+  // TODO: this could also be r_valid/b_valid and safe one cycle
+  assign data_rvalid_o = gnt_q;
 
 endmodule
