@@ -99,21 +99,17 @@ module core2axi
   );
 
 
-  enum logic [2:0] { IDLE, READ_WAIT, READ_ACK, WRITE_DATA, WRITE_WAIT } CS, NS;
+  enum logic [2:0] { IDLE, READ_WAIT, WRITE_DATA, WRITE_ADDR, WRITE_WAIT } CS, NS;
 
-  logic    gnt_q;
+  logic    valid;
+  logic    granted;
 
-  logic    done;
-
-
-  // TODO: this IP can safe some cycles when multiple request are sent
-  // directly after each other
+  // main FSM
   always_comb
   begin
     NS         = CS;
-    done       = 1'b0;
-
-    data_gnt_o = 1'b0;
+    granted    = 1'b0;
+    valid      = 1'b0;
 
     aw_valid_o = 1'b0;
     ar_valid_o = 1'b0;
@@ -123,66 +119,166 @@ module core2axi
 
     case (CS)
       // wait for a request to come in from the core
-      IDLE:
-      begin
+      IDLE: begin
+        // the same logic is also inserted in READ_WAIT and WRITE_WAIT, if you
+        // change it here, take care to change it there too!
         if (data_req_i)
         begin
-
           // send address over aw channel for writes,
           // over ar channels for reads
           if (data_we_i)
           begin
             aw_valid_o = 1'b1;
+            w_valid_o  = 1'b1;
 
-            if (aw_ready_i)
-              NS = WRITE_DATA;
-          end
-          else
-          begin
+            if (aw_ready_i) begin
+              if (w_ready_i) begin
+                granted = 1'b1;
+                NS = WRITE_WAIT;
+              end else begin
+                NS = WRITE_DATA;
+              end
+            end else begin
+              if (w_ready_i) begin
+                NS = WRITE_ADDR;
+              end else begin
+                NS = IDLE;
+              end
+            end
+          end else begin
             ar_valid_o = 1'b1;
 
-            if (ar_ready_i)
+            if (ar_ready_i) begin
+              granted = 1'b1;
               NS = READ_WAIT;
+            end else begin
+              NS = IDLE;
+            end
           end
+        end else begin
+          NS = IDLE;
         end
       end
 
-      WRITE_DATA:
-      begin
-        w_valid_o = 1'b1;
-
-        if (w_ready_i)
-        begin
+      // if the bus has not accepted our write data right away, but has
+      // accepted the address already
+      WRITE_DATA: begin
+        if (w_ready_i) begin
+          granted = 1'b1;
           NS = WRITE_WAIT;
-          data_gnt_o = 1'b1;
         end
       end
 
+      // the bus has accepted the write data, but not yet the address
+      // this happens very seldom, but we still have to deal with the
+      // situation
+      WRITE_ADDR: begin
+        aw_valid_o = 1'b1;
+
+        if (aw_ready_i) begin
+          granted = 1'b1;
+          NS = WRITE_WAIT;
+        end
+      end
+
+      // we have sent the address and data and just wait for the write data to
+      // be done
       WRITE_WAIT:
       begin
         b_ready_o = 1'b1;
 
         if (b_valid_i)
         begin
-          done = 1'b1;
-          NS = IDLE;
+          valid = 1'b1;
+
+          // the same logic is also inserted in IDLE and READ_WAIT, if you
+          // change it here, take care to change it there too!
+          if (data_req_i)
+          begin
+            // send address over aw channel for writes,
+            // over ar channels for reads
+            if (data_we_i)
+            begin
+              aw_valid_o = 1'b1;
+              w_valid_o  = 1'b1;
+
+              if (aw_ready_i) begin
+                if (w_ready_i) begin
+                  granted = 1'b1;
+                  NS = WRITE_WAIT;
+                end else begin
+                  NS = WRITE_DATA;
+                end
+              end else begin
+                if (w_ready_i) begin
+                  NS = WRITE_ADDR;
+                end else begin
+                  NS = IDLE;
+                end
+              end
+            end else begin
+              ar_valid_o = 1'b1;
+
+              if (ar_ready_i) begin
+                granted = 1'b1;
+                NS = READ_WAIT;
+              end else begin
+                NS = IDLE;
+              end
+            end
+          end else begin
+            NS = IDLE;
+          end
         end
       end
 
+      // we wait for the read response, address has been sent successfully
       READ_WAIT:
       begin
         if (r_valid_i)
         begin
-          data_gnt_o = 1'b1;
-          NS = READ_ACK;
-        end
-      end
+          valid     = 1'b1;
+          r_ready_o = 1'b1;
 
-      READ_ACK:
-      begin
-        done = 1'b1;
-        r_ready_o = 1'b1;
-        NS = IDLE;
+          // the same logic is also inserted in IDLE and WRITE_WAIT, if you
+          // change it here, take care to change it there too!
+          if (data_req_i)
+          begin
+            // send address over aw channel for writes,
+            // over ar channels for reads
+            if (data_we_i)
+            begin
+              aw_valid_o = 1'b1;
+              w_valid_o  = 1'b1;
+
+              if (aw_ready_i) begin
+                if (w_ready_i) begin
+                  granted = 1'b1;
+                  NS = WRITE_WAIT;
+                end else begin
+                  NS = WRITE_DATA;
+                end
+              end else begin
+                if (w_ready_i) begin
+                  NS = WRITE_ADDR;
+                end else begin
+                  NS = IDLE;
+                end
+              end
+            end else begin
+              ar_valid_o = 1'b1;
+
+              if (ar_ready_i) begin
+                granted = 1'b1;
+                NS = READ_WAIT;
+              end else begin
+                NS = IDLE;
+              end
+            end
+          end else begin
+            NS = IDLE;
+          end
+        end
       end
 
       default:
@@ -198,12 +294,10 @@ module core2axi
     if (~rst_ni)
     begin
       CS     <= IDLE;
-      gnt_q  <= 1'b0;
     end
     else
     begin
       CS     <= NS;
-      gnt_q  <= data_gnt_o;
     end
   end
 
@@ -274,7 +368,7 @@ module core2axi
   assign w_last_o    = 1'b1;
   assign w_user_o    = '0;
 
-  // TODO: this could also be r_valid/b_valid and safe one cycle
-  assign data_rvalid_o = gnt_q;
+  assign data_rvalid_o = valid;
+  assign data_gnt_o    = granted;
 
 endmodule
