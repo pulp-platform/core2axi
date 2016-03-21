@@ -1,4 +1,4 @@
-axi2apb:
+core2axi:
   files: [
-    core2axi.sv,
+    rtl/core2axi.sv,
   ]
