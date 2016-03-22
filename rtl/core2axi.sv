@@ -19,7 +19,8 @@ module core2axi
     parameter AXI4_RDATA_WIDTH   = 32,
     parameter AXI4_WDATA_WIDTH   = 32,
     parameter AXI4_ID_WIDTH      = 16,
-    parameter AXI4_USER_WIDTH    = 10
+    parameter AXI4_USER_WIDTH    = 10,
+    parameter REGISTERED_GRANT   = "FALSE"           // "TRUE"|"FALSE"
 )
 (
     // Clock and Reset
@@ -101,8 +102,9 @@ module core2axi
 
   enum logic [2:0] { IDLE, READ_WAIT, WRITE_DATA, WRITE_ADDR, WRITE_WAIT } CS, NS;
 
-  logic    valid;
-  logic    granted;
+  logic [31:0]  rdata;
+  logic         valid;
+  logic         granted;
 
   // main FSM
   always_comb
@@ -191,44 +193,7 @@ module core2axi
         begin
           valid = 1'b1;
 
-          // the same logic is also inserted in IDLE and READ_WAIT, if you
-          // change it here, take care to change it there too!
-          if (data_req_i)
-          begin
-            // send address over aw channel for writes,
-            // over ar channels for reads
-            if (data_we_i)
-            begin
-              aw_valid_o = 1'b1;
-              w_valid_o  = 1'b1;
-
-              if (aw_ready_i) begin
-                if (w_ready_i) begin
-                  granted = 1'b1;
-                  NS = WRITE_WAIT;
-                end else begin
-                  NS = WRITE_DATA;
-                end
-              end else begin
-                if (w_ready_i) begin
-                  NS = WRITE_ADDR;
-                end else begin
-                  NS = IDLE;
-                end
-              end
-            end else begin
-              ar_valid_o = 1'b1;
-
-              if (ar_ready_i) begin
-                granted = 1'b1;
-                NS = READ_WAIT;
-              end else begin
-                NS = IDLE;
-              end
-            end
-          end else begin
-            NS = IDLE;
-          end
+          NS = IDLE;
         end
       end
 
@@ -240,44 +205,7 @@ module core2axi
           valid     = 1'b1;
           r_ready_o = 1'b1;
 
-          // the same logic is also inserted in IDLE and WRITE_WAIT, if you
-          // change it here, take care to change it there too!
-          if (data_req_i)
-          begin
-            // send address over aw channel for writes,
-            // over ar channels for reads
-            if (data_we_i)
-            begin
-              aw_valid_o = 1'b1;
-              w_valid_o  = 1'b1;
-
-              if (aw_ready_i) begin
-                if (w_ready_i) begin
-                  granted = 1'b1;
-                  NS = WRITE_WAIT;
-                end else begin
-                  NS = WRITE_DATA;
-                end
-              end else begin
-                if (w_ready_i) begin
-                  NS = WRITE_ADDR;
-                end else begin
-                  NS = IDLE;
-                end
-              end
-            end else begin
-              ar_valid_o = 1'b1;
-
-              if (ar_ready_i) begin
-                granted = 1'b1;
-                NS = READ_WAIT;
-              end else begin
-                NS = IDLE;
-              end
-            end
-          end else begin
-            NS = IDLE;
-          end
+          NS = IDLE;
         end
       end
 
@@ -303,7 +231,7 @@ module core2axi
 
   // take care of read data adaption
   generate if (AXI4_RDATA_WIDTH == 32) begin
-      assign data_rdata_o = r_data_i[31:0];
+      assign rdata = r_data_i[31:0];
     end else if (AXI4_RDATA_WIDTH == 64) begin
       logic [0:0] addr_q;
 
@@ -316,9 +244,11 @@ module core2axi
             addr_q <= data_addr_i[2:2];
       end
 
-      assign data_rdata_o = addr_q[0] ? r_data_i[63:32] : r_data_i[31:0];
+      assign rdata = addr_q[0] ? r_data_i[63:32] : r_data_i[31:0];
     end else begin
-      $error("AXI4_WDATA_WIDTH has an invalid value");
+      `ifndef SYNTHESIS
+      initial $error("AXI4_WDATA_WIDTH has an invalid value");
+      `endif
     end
   endgenerate;
 
@@ -336,14 +266,16 @@ module core2axi
     end else if (AXI4_WDATA_WIDTH == 64) begin
       assign w_strb_o = data_addr_i[2] ? {data_be_i, 4'b0000} : {4'b0000, data_be_i};
     end else begin
-      $error("AXI4_WDATA_WIDTH has an invalid value");
+      `ifndef SYNTHESIS
+      initial $error("AXI4_WDATA_WIDTH has an invalid value");
+      `endif
     end
   endgenerate
 
   // AXI interface assignments
   assign aw_id_o     = '0;
   assign aw_addr_o   = data_addr_i;
-  assign aw_size_o   = $clog2(AXI4_WDATA_WIDTH/8);
+  assign aw_size_o   = 3'b010;
   assign aw_len_o    = '0;
   assign aw_burst_o  = '0;
   assign aw_lock_o   = '0;
@@ -355,7 +287,7 @@ module core2axi
 
   assign ar_id_o     = '0;
   assign ar_addr_o   = data_addr_i;
-  assign ar_size_o   = $clog2(AXI4_RDATA_WIDTH/8);
+  assign ar_size_o   = 3'b010;
   assign ar_len_o    = '0;
   assign ar_burst_o  = '0;
   assign ar_prot_o   = '0;
@@ -368,7 +300,36 @@ module core2axi
   assign w_last_o    = 1'b1;
   assign w_user_o    = '0;
 
-  assign data_rvalid_o = valid;
-  assign data_gnt_o    = granted;
+  generate if (REGISTERED_GRANT == "TRUE")
+    begin
+      logic        valid_q;
+      logic [31:0] rdata_q;
+
+      always_ff @(posedge clk_i, negedge rst_ni)
+      begin
+        if (~rst_ni) begin
+          valid_q <= 1'b0;
+          rdata_q <= '0;
+        end
+        else
+        begin
+          valid_q <= valid;
+
+          if (valid)
+            rdata_q <= rdata;
+        end
+      end
+
+      assign data_rdata_o  = rdata_q;
+      assign data_rvalid_o = valid_q;
+      assign data_gnt_o    = valid;
+    end
+    else
+    begin
+      assign data_rdata_o  = rdata;
+      assign data_rvalid_o = valid;
+      assign data_gnt_o    = granted;
+    end
+  endgenerate
 
 endmodule
