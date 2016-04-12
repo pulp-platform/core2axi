@@ -165,6 +165,7 @@ module core2axi
       // if the bus has not accepted our write data right away, but has
       // accepted the address already
       WRITE_DATA: begin
+        w_valid_o = 1'b1;
         if (w_ready_i) begin
           granted = 1'b1;
           NS = WRITE_WAIT;
