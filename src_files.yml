@@ -1,4 +1,4 @@
 core2axi:
   files: [
-    rtl/core2axi.sv,
+    core2axi.sv,
   ]
