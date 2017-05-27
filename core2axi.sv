@@ -251,7 +251,7 @@ module core2axi
       initial $error("AXI4_WDATA_WIDTH has an invalid value");
       `endif
     end
-  endgenerate;
+  endgenerate
 
   // take care of write data adaption
   generate
